@@ -1,0 +1,19 @@
+[
+  {
+    "queued": 1,
+    "total": 2,
+    "results": [
+      {
+        "to": "+919724556935",
+        "sid": "CA142fab710097d73d6d5328038112266e",
+        "status": "queued"
+      },
+      {
+        "to": "9978256935",
+        "error": "HTTP 400 error: Unable to create record: The number +919978256935 is unverified. Trial accounts may only make calls to verified numbers."
+      }
+    ],
+    "id": "camp-1-1780854365",
+    "created_at": "2026-06-07T23:16:05"
+  }
+]

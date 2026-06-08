@@ -33,6 +33,22 @@ import storage  # noqa: E402
 
 app = Flask(__name__)
 
+
+@app.after_request
+def _cors(resp):
+    """Allow the Next.js frontend (localhost:3000) to call this API."""
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "*"
+    return resp
+
+
+@app.before_request
+def _preflight():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+
 AUDIO_DIR = os.path.join(os.path.dirname(__file__), "static", "audio")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
@@ -320,6 +336,82 @@ def call():
         return redirect(url_for("dashboard",
                                 msg=f"Calling {_to_e164(to)} … (SID {c.sid})", ok=1))
     return {"sid": c.sid, "to": c.to, "status": c.status}
+
+
+@app.route("/campaign", methods=["POST"])
+def campaign():
+    """Place outbound calls to a list of numbers (a calling campaign)."""
+    body = request.get_json(silent=True) or {}
+    numbers = body.get("numbers") or []
+    if isinstance(numbers, str):
+        numbers = [n for n in numbers.replace(",", "\n").splitlines() if n.strip()]
+    if not numbers:
+        return {"error": "no numbers provided"}, 400
+
+    results = []
+    for raw in numbers:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            c = place_call(raw)
+            results.append({"to": _to_e164(raw), "sid": c.sid, "status": c.status})
+        except Exception as e:  # noqa: BLE001
+            results.append({"to": raw, "error": str(e)})
+    ok = sum(1 for r in results if r.get("sid"))
+    saved = storage.save_campaign({"queued": ok, "total": len(results), "results": results})
+    return {"id": saved["id"], "queued": ok, "total": len(results), "results": results}
+
+
+@app.route("/api/campaigns")
+def api_campaigns():
+    """List launched campaigns, enriched with live call completion counts."""
+    leads_ = {r.get("call_sid"): r for r in storage.all_leads()}
+    out = []
+    for camp in reversed(storage.all_campaigns()):
+        completed = 0
+        for r in camp.get("results", []):
+            lead = leads_.get(r.get("sid"))
+            if lead and lead.get("completed"):
+                completed += 1
+        out.append({
+            "id": camp.get("id"),
+            "created_at": camp.get("created_at"),
+            "total": camp.get("total", 0),
+            "queued": camp.get("queued", 0),
+            "completed": completed,
+            "results": camp.get("results", []),
+        })
+    return {"count": len(out), "campaigns": out}
+
+
+@app.route("/api/stats")
+def api_stats():
+    """Aggregate stats for the dashboard / analytics pages."""
+    leads_ = storage.all_leads()
+    total = len(leads_)
+    completed = sum(1 for r in leads_ if r.get("completed"))
+    by_qual, by_program = {}, {}
+    total_dur = 0
+    for r in leads_:
+        q = (r.get("qualification") or "Unknown").strip() or "Unknown"
+        by_qual[q] = by_qual.get(q, 0) + 1
+        for p in r.get("suggested_programs", []):
+            by_program[p] = by_program.get(p, 0) + 1
+        try:
+            total_dur += int(r.get("call_duration") or 0)
+        except (TypeError, ValueError):
+            pass
+    named = sum(1 for r in leads_ if (r.get("name") or "").strip())
+    return {
+        "total_calls": total,
+        "completed_calls": completed,
+        "leads_captured": named,
+        "conversion_pct": round(100 * named / total) if total else 0,
+        "avg_duration_sec": round(total_dur / total) if total else 0,
+        "by_qualification": by_qual,
+        "by_program": by_program,
+    }
 
 
 @app.route("/call-status", methods=["POST"])

@@ -25,8 +25,10 @@ from datetime import datetime
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 LEADS_FILE = os.path.join(DATA_DIR, "leads.json")
+CAMPAIGNS_FILE = os.path.join(DATA_DIR, "campaigns.json")
 
 _lock = threading.Lock()
+_camp_lock = threading.Lock()
 
 
 def _now():
@@ -72,3 +74,38 @@ def upsert_lead(call_sid, **fields):
 def all_leads():
     with _lock:
         return _load()
+
+
+# --------------------------------------------------------------------------- #
+# Campaigns
+# --------------------------------------------------------------------------- #
+def _load_campaigns():
+    if not os.path.exists(CAMPAIGNS_FILE):
+        return []
+    try:
+        with open(CAMPAIGNS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def save_campaign(record):
+    """Append a launched-campaign record. Returns it (with id + created_at)."""
+    with _camp_lock:
+        camps = _load_campaigns()
+        record = dict(record)
+        record["id"] = f"camp-{len(camps) + 1}-{int(datetime.now().timestamp())}"
+        record["created_at"] = _now()
+        camps.append(record)
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = CAMPAIGNS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(camps, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, CAMPAIGNS_FILE)
+        return record
+
+
+def all_campaigns():
+    with _camp_lock:
+        return _load_campaigns()
