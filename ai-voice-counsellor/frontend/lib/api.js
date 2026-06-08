@@ -1,5 +1,7 @@
 // Thin client for the Flask backend (the AI voice counsellor API).
-const BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:5000").replace(/\/$/, "");
+// Uses NEXT_PUBLIC_API_BASE if set (e.g. http://127.0.0.1:5000 locally via
+// .env.local); otherwise defaults to the deployed Render backend.
+const BASE = (process.env.NEXT_PUBLIC_API_BASE || "https://darshan-university.onrender.com").replace(/\/$/, "");
 
 async function req(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, {
