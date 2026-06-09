@@ -521,14 +521,15 @@ def reply():
         return str(vr), 200, {"Content-Type": "text/xml"}
 
     if pend.get("status") != "done":
-        # Still working -> short filler, then check again (bounded poll loop).
-        if polls < 25:
-            if polls > 0:
-                vr.play(_filler_url(FILLER_WAIT))
-            vr.pause(length=1)
+        # Still working. The main filler already played once in /process, so here
+        # we mostly hold quietly and only reassure occasionally -- otherwise slow
+        # turns (e.g. on a small cloud instance) would repeat the filler many times.
+        if polls < 30:
+            if polls > 0 and polls % 3 == 0:
+                vr.play(_filler_url(FILLER_WAIT))   # gentle reassurance ~every 6s
+            vr.pause(length=2)
             vr.redirect(_abs("reply") + f"?CallSid={call_sid}&n={polls + 1}")
         else:
-            vr.play(_filler_url(FILLER_WAIT))
             vr.redirect(_abs("reply") + f"?CallSid={call_sid}&n=0")
         return str(vr), 200, {"Content-Type": "text/xml"}
 
