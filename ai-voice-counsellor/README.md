@@ -1,198 +1,297 @@
-# AI Voice Admission Counsellor — Darshan University (Demo)
+# AI Voice Admission Counsellor — Darshan University
 
-A phone-based AI admission counsellor. A student calls a Twilio number, the
-agent greets them **in Gujarati**, asks for their **name** and **latest
-qualification**, and then suggests matching **Darshan University** degree
-programs.
+An AI-powered **voice** admission counsellor. A student receives a phone call, and
+an AI agent talks to them **in Gujarati** — it greets them, asks their **name**,
+**latest qualification** and **marks**, then lists and explains the matching
+**Darshan University** degree programs (duration, eligibility, fees, placement),
+answers follow-up questions, and logs everything as a lead.
 
-```
-Caller ─► Twilio (Record) ─► Bhashini ASR (Gujarati→text)
-       ─► GPT-4o-mini (counsellor logic) ─► Bhashini TTS (text→Gujarati)
-       ─► Twilio (Play) ─► next turn …
-```
-
-- **Telephony:** Twilio Programmable Voice
-- **Speech (Gujarati STT + TTS):** Bhashini (MeitY / ULCA), low sampling rate (8 kHz) for low latency
-- **Brain:** OpenAI `gpt-4o-mini`
-- **Tunnel:** ngrok
-- **Knowledge base:** `programs.json` — 10 real programs scraped from <https://darshan.ac.in/programs>
+The system has a **telephony voice pipeline** (Twilio + Bhashini + GPT‑4o‑mini) and
+a **web admin console** (Next.js) for dialing, campaigns, leads, analytics and call
+logs.
 
 ---
 
-## 1. Setup
-
-```powershell
-cd "e:\Darshan University\ai-voice-counsellor"
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-```
-
-Edit `.env` and fill in:
-
-| Variable | What it is |
-|---|---|
-| `OPENAI_API_KEY` | OpenAI key |
-| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | from Twilio console (used to download recordings) |
-| `TWILIO_FROM_NUMBER` | your Twilio phone number |
-| `BHASHINI_INFERENCE_KEY` | your **inference** key — this alone is enough (direct mode) |
-| `BHASHINI_UDYAT_KEY` | your **Udyat / ULCA** key (only needed for config mode) |
-| `PUBLIC_BASE_URL` | your ngrok HTTPS URL, e.g. `https://xxxx.ngrok-free.dev` |
-
-> **About your keys (Bhashini has two modes):**
-> - **Direct mode (default, what this demo uses):** the inference call goes
->   straight to the Dhruva endpoint with `Authorization: <BHASHINI_INFERENCE_KEY>`
->   and fixed Gujarati service ids. **No userID needed.** This is verified working.
-> - **Config mode (optional):** if you also set `BHASHINI_USER_ID` +
->   `BHASHINI_UDYAT_KEY`, the client first calls `getModelsPipeline` to resolve
->   service ids dynamically.
-
-> ⚠️ **Security:** keep your real keys in `.env` (gitignored), **not** in
-> `.env.example`. Rotate any keys you've already committed.
-
-## 2. Test locally first (no phone call)
-
-Verify the brain + Bhashini speech work before touching Twilio:
-
-```powershell
-python test_local.py          # brain + TTS + ASR round-trip
-python test_local.py brain    # only the GPT Gujarati conversation
-python test_local.py tts      # only TTS -> static/audio/test_tts.wav
-python test_local.py asr      # only ASR round-trip
-```
-
-Expected: a Gujarati conversation (name → qualification → 2-3 B.Tech/BCA/MBA
-suggestions), a generated `test_tts.wav` you can play, and an ASR transcript.
-
-## 3. Run the app
-
-```powershell
-python app.py
-```
-
-The server starts on `http://localhost:5000`.
-
-## 4. Expose with ngrok
-
-In a second terminal:
-
-```powershell
-ngrok http 5000
-```
-
-Copy the HTTPS forwarding URL, e.g. `https://abc123.ngrok-free.app`.
-
-## 5. Make OUTBOUND calls (primary mode)
-
-The system dials students from your Twilio number and runs the counsellor. Three ways:
-
-**A. Browser dashboard** — open the public URL root:
-```
-https://saloon-untried-maturely.ngrok-free.dev/
-```
-Enter a number, click **Call now**. The page also lists captured leads.
-
-**B. CLI** (single, multiple, or a file):
-```powershell
-python make_call.py 9724556935                 # one (10-digit -> +91)
-python make_call.py 9724556935 9913000000      # several
-python make_call.py --file numbers.txt          # one per line
-```
-
-**C. HTTP API:**
-```powershell
-Invoke-RestMethod -Uri "https://saloon-untried-maturely.ngrok-free.dev/call" `
-  -Method POST -ContentType "application/json" -Body '{"to":"9724556935"}'
-```
-
-> Outbound endpoints: `GET /` dashboard · `POST /call` trigger · `POST /call-status`
-> Twilio status callback (records call outcome on the lead).
->
-> ⚠️ **Trial Twilio accounts** can only call **verified** numbers, and India (+91)
-> needs international permissions + balance. Verify the destination number in the
-> Twilio console first if calls fail.
-
-## 6. (Optional) Inbound calls — point Twilio at it
-
-In the Twilio Console → your phone number → **Voice → A call comes in**:
-
-- Set to **Webhook**, `POST`
-- URL: `https://abc123.ngrok-free.app/voice`
-
-Save.
-
-## 7. Inbound test call 📞
-
-Speak in Gujarati. The flow:
-
-1. *"નમસ્તે! દર્શન યુનિવર્સિટીમાં આપનું સ્વાગત છે. તમારું નામ જણાવશો?"*
-2. Student says their name.
-3. *"તમારી છેલ્લી લાયકાત શું છે?"* (latest qualification)
-4. Student answers (e.g. *"બારમું સાયન્સ"*).
-5. Agent suggests 2–3 matching programs and closes the call.
+## Table of Contents
+1. [Technology Stack Used](#1-technology-stack-used)
+2. [System Architecture](#2-system-architecture)
+3. [Application Flow Diagram](#3-application-flow-diagram)
+4. [ER Diagram](#4-er-diagram)
+5. [Paid Services and Cost Details](#5-paid-services-and-cost-details)
+6. [Other Relevant Technical Information](#6-other-relevant-technical-information)
 
 ---
 
-## Files
+## 1. Technology Stack Used
 
-| File | Role |
-|---|---|
-| `app.py` | Flask + Twilio webhooks, per-turn pipeline, call state |
-| `bhashini.py` | Bhashini ASR + TTS client (ULCA config cached) |
-| `counsellor.py` | GPT-4o-mini turn logic (returns structured JSON) |
-| `programs.json` | 10 Darshan University programs + eligibility |
-| `storage.py` | JSON "database" — upserts each call's lead into `data/leads.json` |
-| `make_call.py` | CLI to place outbound calls (single / multiple / `--file`) |
-| `smoke_test.py` | End-to-end test (no phone): app + Bhashini + GPT + DB |
-| `call_status.py` | Check a Twilio call's status by SID |
-
-## Captured data (JSON database)
-
-Every call is saved live to **`data/leads.json`** (upserted by CallSid, so even
-incomplete calls are kept). Each record holds the student's name, latest
-qualification, the programs suggested, the full Gujarati conversation, the
-caller's number, and timestamps:
-
-```json
-{
-  "call_sid": "CA...",
-  "name": "રોનક",
-  "qualification": "12મું સાયન્સ",
-  "suggested_programs": ["B.Tech. Computer Science and Engineering"],
-  "stage": "done",
-  "completed": true,
-  "from_number": "+91...",
-  "conversation": [{"role": "assistant", "content": "..."}],
-  "created_at": "2026-06-05T18:12:05",
-  "updated_at": "2026-06-05T18:13:40"
-}
-```
-
-View all leads in the browser: **`<PUBLIC_BASE_URL>/leads`** (or `http://localhost:5000/leads`).
-
-## Change the agent's voice
-
-The voice is a **soft female** by default. Tune it in `.env` (no code changes):
-
-| Variable | Default | Effect |
+| Layer | Technology | Purpose |
 |---|---|---|
-| `BHASHINI_TTS_GENDER` | `female` | `female` or `male` |
-| `BHASHINI_TTS_SAMPLING_RATE` | `16000` | higher = warmer/clearer (e.g. `22050`); `8000` = telephony |
-| `BHASHINI_TTS_VOLUME` | `0.7` | `0.0`–`1.0`; lower = softer/gentler |
+| **Telephony** | **Twilio** Programmable Voice | Places outbound calls, streams TwiML (`<Play>`, `<Record>`, `<Pause>`, `<Redirect>`, `<Hangup>`), delivers webhooks |
+| **Speech (STT + TTS)** | **Bhashini** (MeitY / ULCA, Dhruva inference API) | Gujarati **ASR** (speech→text) and **TTS** (text→speech) |
+| **Language model** | **OpenAI GPT‑4o‑mini** | Understands the student, drives the conversation state machine, generates Gujarati replies (strict JSON output) |
+| **Backend** | **Python 3.13 · Flask** | REST API + Twilio webhooks + orchestration |
+| **Backend (prod server)** | **Gunicorn** (`--workers 1 --threads 8`) | Production WSGI server on Render |
+| **Concurrency** | Python `threading` | Per-turn processing runs in a background thread while a filler plays |
+| **Audio processing** | Pure Python (`wave`/`struct`/`array`, `math`) | WAV parsing, 8 kHz→16 kHz upsampling for ASR, volume + low‑pass "soft voice" filter, PCM normalization |
+| **Data store** | **JSON files** (`data/leads.json`, `data/campaigns.json`) | Lead + campaign persistence (file-based, no DB) |
+| **Knowledge base** | `programs.json` | 10 real Darshan University programs (scraped from darshan.ac.in) |
+| **Frontend** | **Next.js 14** (App Router) · **React 18** | Admin console SPA |
+| **UI / Charts** | **Tailwind CSS** · **Recharts** | Styling + analytics charts |
+| **Local tunnel** | **ngrok** (reserved domain) | Exposes local backend to Twilio during development |
+| **Hosting** | **Render** (backend + frontend); **Vercel** (frontend alt.) | Cloud deployment |
 
-To compare options, run `python voice_samples.py` — it writes sample clips to
-`static/audio/` so you can listen before choosing.
+---
 
-## Latency notes
+## 2. System Architecture
 
-- 8 kHz sampling for both ASR and TTS (telephony quality, smaller payloads).
-- Bhashini pipeline config is fetched once and cached.
-- Short LLM replies (1–2 sentences, `max_tokens=300`).
-- `<Record timeout="3">` ends a turn quickly after the student stops speaking.
+```mermaid
+flowchart LR
+    Caller([📱 Student's Phone])
 
-## Demo limitations
+    subgraph Cloud_Services["External Services"]
+      Twilio["Twilio<br/>Programmable Voice"]
+      OpenAI["OpenAI<br/>GPT-4o-mini"]
+      Bhashini["Bhashini<br/>Gujarati ASR + TTS"]
+    end
 
-- Call state is in-memory (`CALLS` dict) — fine for a single-instance demo, not for production scale.
-- No webhook signature validation (add `twilio.request_validator` for production).
-- Generated audio accumulates in `static/audio/` — clear it periodically.
+    subgraph App["Our Application"]
+      direction TB
+      FE["Next.js Frontend<br/>(Admin Console)"]
+      API["Flask Backend<br/>REST API + Twilio Webhooks"]
+      DB[("JSON store<br/>leads.json · campaigns.json")]
+      KB[("programs.json<br/>knowledge base")]
+    end
+
+    Admin([👩‍💼 Admin / Browser]) --> FE
+    FE -->|REST + CORS| API
+    API --> DB
+    API --> KB
+    API -->|place call / REST| Twilio
+    Twilio <-->|PSTN voice| Caller
+    Twilio <-->|voice webhooks| API
+    API -->|transcribe / synthesize| Bhashini
+    API -->|reason + generate| OpenAI
+```
+
+**How the pieces fit:**
+- The **Admin** uses the **Next.js frontend** to dial numbers, run campaigns, and view leads/analytics. It talks to the **Flask backend** over REST (CORS-enabled).
+- The **Flask backend** is the brain: it places calls via **Twilio**, receives Twilio's **voice webhooks**, and per turn calls **Bhashini** (ASR + TTS) and **OpenAI** (reasoning). It reads the **`programs.json`** knowledge base and persists results to **JSON files**.
+- **Twilio** bridges the internet and the **PSTN**, so a real phone rings and audio flows both ways.
+
+---
+
+## 3. Application Flow Diagram
+
+### 3a. Per‑call voice pipeline
+
+```mermaid
+sequenceDiagram
+    participant U as 📱 Student
+    participant T as Twilio
+    participant F as Flask Backend
+    participant B as Bhashini
+    participant G as GPT-4o-mini
+
+    F->>T: POST Calls API (place outbound call)
+    T->>U: rings → student answers
+    T->>F: POST /voice
+    F-->>T: <Play> Gujarati greeting (cached) + <Record>
+    T->>U: plays greeting, records answer
+
+    loop Each conversation turn
+        U->>T: speaks (Gujarati)
+        T->>F: POST /process (RecordingUrl)
+        F-->>T: <Play> filler + <Redirect> /reply
+        Note over F: background thread starts
+        F->>B: ASR — download WAV, upsample 8→16 kHz, transcribe
+        F->>G: history + hints → strict JSON (reply, stage, fields)
+        F->>B: TTS — Gujarati text → soft voice WAV
+        T->>F: GET /reply (polls while "working")
+        F-->>T: filler / short hold until ready
+        F-->>T: <Play> reply + <Record> next answer
+    end
+
+    T->>F: POST /call-status (completed)
+    F->>F: upsert lead → data/leads.json
+```
+
+**Latency masking:** `/process` returns instantly with a filler ("હું જોઈ રહ્યો છું…") while the heavy work (ASR → GPT → TTS) runs in a background thread; `/reply` polls until the reply audio is ready, so the caller never hears dead silence.
+
+### 3b. Conversation state machine (driven by GPT‑4o‑mini + code guards)
+
+```mermaid
+stateDiagram-v2
+    [*] --> ask_name
+    ask_name --> ask_qualification: captured NAME
+    ask_qualification --> ask_marks: captured QUALIFICATION
+    ask_marks --> list_programs: captured MARKS → warm reaction + list courses
+    list_programs --> program_details: student picks a course → full info (duration, fee, career)
+    program_details --> program_details: "more details" / another course / placement question
+    program_details --> done: student says "no / thanks"
+    done --> [*]
+```
+
+Deterministic **keyword detectors** (qualification / marks / end-intent) and an
+**empty-response retry** wrap the LLM so valid Gujarati answers are never wrongly
+rejected.
+
+---
+
+## 4. ER Diagram
+
+The system is file-based (JSON), but the logical data model is:
+
+```mermaid
+erDiagram
+    LEAD ||--o{ MESSAGE : "has conversation"
+    CAMPAIGN ||--o{ CAMPAIGN_RESULT : "contains"
+    CAMPAIGN_RESULT }o--|| LEAD : "call_sid"
+    LEAD }o--o{ PROGRAM : "suggested_programs"
+
+    LEAD {
+        string call_sid PK
+        string name
+        string qualification
+        string marks
+        string student_number
+        string stage
+        boolean completed
+        string call_status
+        int call_duration
+        datetime created_at
+        datetime updated_at
+    }
+    MESSAGE {
+        string role "assistant | user"
+        string content
+    }
+    CAMPAIGN {
+        string id PK
+        datetime created_at
+        int total
+        int queued
+    }
+    CAMPAIGN_RESULT {
+        string to
+        string sid FK
+        string status
+        string error
+    }
+    PROGRAM {
+        string id PK
+        string name
+        string level
+        string duration_gu
+        string eligibility
+        string fees_gu
+        string placement_gu
+        string career_gu
+    }
+```
+
+- **LEAD** — one per call (keyed by Twilio `call_sid`); stores captured profile + full transcript. → `data/leads.json`
+- **MESSAGE** — each turn of the conversation (embedded in the lead).
+- **CAMPAIGN / CAMPAIGN_RESULT** — a bulk-dial run and its per-number outcomes; each result links back to a LEAD via `call_sid`. → `data/campaigns.json`
+- **PROGRAM** — the read-only knowledge base of 10 Darshan University degrees. → `programs.json`
+
+---
+
+## 5. Paid Services and Cost Details
+
+| Service | Pricing model | Approx. cost | Notes |
+|---|---|---|---|
+| **Bhashini** (ASR + TTS) | **Free** | **₹0** | Government of India (MeitY) service — free for Gujarati speech. Core cost advantage. |
+| **OpenAI GPT‑4o‑mini** | Per token — $0.15 / 1M input, $0.60 / 1M output | **≈ $0.003–0.01 per full call** | A ~10‑turn call ≈ a fraction of a cent. Negligible. |
+| **Twilio phone number** | Monthly rental | **≈ $1.15 / month** (US local number) | One number needed to place calls. |
+| **Twilio outbound calls** | Per minute | **≈ $0.08–0.15 / min** (US number → India mobile) | Observed ~$0.045–0.09 for 15–60 s test calls. **Trial account gives ~$15 free credit** and can only call verified numbers. |
+| **Render (hosting)** | Free tier / Starter | **$0** (free) or **$7 / month** (Starter) | Free tier has cold starts + CPU throttling; Starter recommended for live demos. |
+| **Vercel (frontend, optional)** | Hobby tier | **Free** | Recommended host for the Next.js frontend. |
+| **ngrok** (local dev only) | Free tier | **Free** | Only for local development, not production. |
+
+**Estimated cost of one complete demo call ≈ ₹8–15 (~$0.10–0.18)** — almost entirely
+Twilio call minutes; speech is free (Bhashini) and the LLM is negligible.
+
+> Prices are indicative (2026) and vary by region, number type and provider plan.
+
+---
+
+## 6. Other Relevant Technical Information
+
+### Project structure
+```
+ai-voice-counsellor/
+├── app.py            # Flask app: Twilio webhooks, REST API, call orchestration
+├── bhashini.py       # Bhashini client: Gujarati ASR + TTS, audio processing
+├── counsellor.py     # GPT-4o-mini brain: prompt, state machine, JSON output
+├── storage.py        # JSON persistence (leads + campaigns)
+├── programs.json     # Knowledge base: 10 Darshan University programs
+├── make_call.py      # CLI: place single / batch outbound calls
+├── requirements.txt  # Python deps (flask, twilio, openai, requests, gunicorn…)
+├── .env.example      # Documented environment variables (no secrets)
+├── data/             # leads.json, campaigns.json (runtime; gitignored leads)
+├── static/audio/     # Generated TTS/filler WAVs (runtime, gitignored)
+└── frontend/         # Next.js admin console (see frontend/README.md)
+    └── app/(app)/    # dashboard, dial, leads, campaign, analytics, call-logs
+```
+
+### Backend API endpoints
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/voice` | Twilio: call connected → greeting + record |
+| POST | `/process` | Twilio: caller's recording → start turn, play filler |
+| GET/POST | `/reply` | Twilio: poll for the reply, then play it |
+| POST | `/call-status` | Twilio: final call outcome callback |
+| POST | `/call` | Place one outbound call (frontend Dial Up) |
+| POST | `/campaign` | Bulk-dial a list of numbers |
+| GET | `/api/stats` | Aggregates for dashboard / analytics |
+| GET | `/api/campaigns` | Campaign history + live completion |
+| GET | `/leads` | All captured leads (JSON) |
+| GET | `/health` | Health check |
+
+### Key design decisions
+- **Bhashini "direct inference" mode** — calls the Dhruva endpoint with just an inference key (no ULCA `userID` needed), using fixed Gujarati service IDs (`ai4bharat/conformer-multilingual-indo_aryan` for ASR, `ai4bharat/indic-tts-coqui-indo_aryan` for TTS).
+- **Telephony‑ASR cleanup** — Twilio records 8 kHz; the code **upsamples to 16 kHz + normalizes volume** before ASR, which dramatically improved recognition of phone audio.
+- **Soft voice** — a pure‑Python **low‑pass filter + gain** over the TTS output for a gentle voice, tunable via env (`BHASHINI_TTS_GENDER/SAMPLING_RATE/VOLUME/SOFTNESS`).
+- **Pronunciation fixes** — abbreviations are expanded for TTS (e.g. `B.Tech`→"બી ટેક", `CSE`→"સી એસ ઈ", `%`→"ટકા", `AI`→"આર્ટિફિશિયલ ઇન્ટેલિજન્સ").
+- **Reliability guards** — deterministic keyword detection + retry on empty LLM responses stop the agent from wrongly asking the student to repeat.
+
+### Configuration (environment variables)
+Backend (`.env` / Render → Environment): `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`,
+`TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `BHASHINI_UDYAT_KEY`,
+`BHASHINI_INFERENCE_KEY`, `DEFAULT_COUNTRY_CODE`, `PUBLIC_BASE_URL`, and optional
+voice vars. Frontend: `NEXT_PUBLIC_API_BASE`. See `.env.example`.
+
+### Run locally
+```powershell
+# 1) Backend
+cd ai-voice-counsellor
+python -m venv .venv ; .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env      # fill in keys
+python app.py               # http://127.0.0.1:5000
+
+# 2) Tunnel (so Twilio can reach it) — separate terminal
+ngrok http 5000             # put the https URL in PUBLIC_BASE_URL + Twilio webhook
+
+# 3) Frontend — separate terminal
+cd frontend
+npm install
+npm run dev                 # http://localhost:3000  (login: admin / darshan123)
+```
+
+### Deployment (Render)
+- **Backend** — Root: `ai-voice-counsellor` · Build: `pip install -r requirements.txt` · Start: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8`
+- **Frontend** — Root: `ai-voice-counsellor/frontend` · Build: `npm install && npm run build` · Start: `npm start`
+- Set env vars in the dashboard; point Twilio's Voice webhook at `<backend-url>/voice`. Region **Singapore** is closer to Bhashini (India) → lower latency.
+
+### Known limitations
+- **In‑memory call state** (`CALLS`/`PENDING`) → run a **single worker**; not horizontally scalable as-is.
+- **JSON storage** and generated audio are **ephemeral on Render's free tier** (reset on redeploy) — use a DB / persistent disk for production.
+- **Free‑tier latency** — cold starts + CPU throttling + US↔India distance slow each turn (mitigated by fillers; better on a paid instance / Singapore region).
+- **Auth is a frontend‑only demo** (localStorage) — replace with real auth (NextAuth/JWT) for production.
+- **Twilio trial** can only call verified numbers.
+
+### Data sources
+Program, fee and placement data were compiled from public listings on
+[darshan.ac.in](https://darshan.ac.in/programs) and education aggregators; treat
+fees/placement figures as **indicative** and confirm official numbers before real use.
